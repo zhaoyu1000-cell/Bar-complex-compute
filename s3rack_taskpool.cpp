@@ -17,12 +17,15 @@
 #include <iostream>
 #include <mutex>
 #include <numeric>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include "sparse_rank_wiedemann.cpp"
 
 using std::int64_t;
 
@@ -294,33 +297,6 @@ static MonoBlocks monodromy_blocks(int n, const std::vector<int>& pow3,
 // -------------------- sparse elimination --------------------
 using SV = std::vector<std::pair<int,int64_t>>;
 
-static inline void sv_scale_inplace(SV& v, int64_t mul, int64_t p) {
-    for (auto &pr : v) pr.second = (int64_t)((__int128)pr.second * mul % p);
-}
-static SV sv_sub_scaled(const SV& v, const SV& pv, int64_t factor, int64_t p) {
-    SV out;
-    out.reserve(v.size() + pv.size());
-    size_t i = 0, j = 0;
-    while (i < v.size() || j < pv.size()) {
-        int idx;
-        int64_t val = 0;
-        if (j == pv.size() || (i < v.size() && v[i].first < pv[j].first)) {
-            idx = v[i].first; val = v[i].second; i++;
-        } else if (i == v.size() || pv[j].first < v[i].first) {
-            idx = pv[j].first; val = 0;
-        } else {
-            idx = v[i].first; val = v[i].second; i++;
-        }
-        if (j < pv.size() && pv[j].first == idx) {
-            int64_t sub = (int64_t)((__int128)factor * pv[j].second % p);
-            val = (val - sub) % p; if (val < 0) val += p;
-            j++;
-        }
-        if (val) out.push_back({idx, val});
-    }
-    return out;
-}
-
 struct Spec { int start, p_len, q_len, out_len, new_pos; int64_t sgn; };
 
 struct VecHash {
@@ -333,8 +309,14 @@ struct VecHash {
     }
 };
 
-// Compute rank of d_k restricted to monodromy block g.
-static int rank_block_for_k_g(
+struct SparseRectMatrix {
+    int rows = 0;
+    int cols = 0;
+    std::vector<SV> col_vectors;  // sparse columns: (row, value)
+};
+
+// Compile d_k restricted to monodromy block g into a sparse rectangular matrix.
+static SparseRectMatrix compile_block_differential_matrix(
     int n, int k, int g, int64_t p,
     const std::vector<std::vector<QShufflePQ>>& qsh,
     const std::vector<int>& pow3,
@@ -372,12 +354,9 @@ static int rank_block_for_k_g(
 
     const auto &words = mb.words_by_g[g];
     const int B = (int)words.size();
-    if (B == 0) return 0;
+    if (B == 0) return {};
 
     const int rows = (int)comps_t.size() * B;
-    std::vector<char> has(rows, 0);
-    std::vector<SV> piv(rows);
-
     std::vector<int64_t> acc(rows, 0);
     std::vector<int> touched; touched.reserve(256);
 
@@ -387,10 +366,15 @@ static int rank_block_for_k_g(
 
     auto idx_map = [&](int wid) -> int { return mb.idx_in_block[wid]; };
 
-    int64_t rank = 0;
+    SparseRectMatrix mat;
+    mat.rows = rows;
+    mat.cols = (int)comps_k.size() * B;
+    mat.col_vectors.assign(mat.cols, {});
+
     for (int ci = 0; ci < (int)comps_k.size(); ci++) {
         const auto &sp = specs[ci];
-        for (int wid : words) {
+        for (int col_local = 0; col_local < B; col_local++) {
+            int wid = words[col_local];
             touched.clear();
             stamp++;
             if (stamp == 0) { std::fill(mark.begin(), mark.end(), 0); stamp = 1; }
@@ -428,24 +412,34 @@ static int rank_block_for_k_g(
                 if (c) vec.push_back({r, c});
                 acc[r] = 0;
             }
-
-            while (!vec.empty()) {
-                int pivot = vec[0].first;
-                if (has[pivot]) {
-                    int64_t factor = vec[0].second;
-                    vec = sv_sub_scaled(vec, piv[pivot], factor, p);
-                } else {
-                    int64_t inv = mod_inv(vec[0].second, p);
-                    sv_scale_inplace(vec, inv, p);
-                    piv[pivot] = std::move(vec);
-                    has[pivot] = 1;
-                    rank++;
-                    break;
-                }
-            }
+            int col = ci * B + col_local;
+            mat.col_vectors[col] = std::move(vec);
         }
     }
-    return (int)rank;
+
+    return mat;
+}
+
+// Rank via Wiedemann on square padding of D (no augmentation doubling).
+static int rank_rectangular_wiedemann(const SparseRectMatrix& d, int64_t p, int repeats,
+                                      int /*threads*/, std::uint64_t seed) {
+    if (d.rows == 0 || d.cols == 0) return 0;
+    const int n = std::max(d.rows, d.cols);
+    sparse_wiedemann::SparsePairMatrix sq(n);
+    std::vector<int> row_nnz(n, 0);
+    for (int c = 0; c < d.cols; ++c) {
+        for (const auto& [r, _] : d.col_vectors[c]) row_nnz[r]++;
+    }
+    for (int r = 0; r < d.rows; ++r) sq[r].reserve(row_nnz[r]);
+
+    for (int c = 0; c < d.cols; ++c) {
+        for (const auto& [r, v] : d.col_vectors[c]) {
+            sq[r].push_back({c, v});
+        }
+    }
+
+    std::mt19937_64 rng(seed);
+    return sparse_wiedemann::rank_probabilistic(sq, p, rng, repeats);
 }
 
 // -------------------- binomial / printing --------------------
@@ -472,9 +466,11 @@ static void print_i128(__int128 x) {
 struct Task { int g; };
 
 int main(int argc, char** argv) {
+    std::cout.setf(std::ios::unitbuf);
     int n = 3;
     int threads = 7;
     int sign = -1;
+    int repeats = 5;
     int64_t m = 1, exp = 1, p = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -489,6 +485,7 @@ int main(int argc, char** argv) {
         else if (s == "--root-exp") exp = std::stoll(need("--root-exp"));
         else if (s == "--sign") sign = std::stoi(need("--sign"));
         else if (s == "--prime") p = std::stoll(need("--prime"));
+        else if (s == "--repeats") repeats = std::stoi(need("--repeats"));
         else throw std::runtime_error("Unknown argument: " + s);
     }
 
@@ -551,28 +548,24 @@ int main(int argc, char** argv) {
             if (!mb.words_by_g[g].empty()) tasks.push_back({g});
         }
 
-        std::atomic<int> next_task(0);
-        std::atomic<int> rank_sum_k(0);
-
         auto k_start = std::chrono::high_resolution_clock::now();
-        auto worker = [&]() {
-            while (true) {
-                int idx = next_task.fetch_add(1, std::memory_order_relaxed);
-                if (idx >= (int)tasks.size()) return;
-                Task t = tasks[idx];
-                int rk = rank_block_for_k_g(n, k, t.g, p, qsh, pow3, mb);
-                rank_sum_k.fetch_add(rk, std::memory_order_relaxed);
-            }
-        };
-
-        std::vector<std::thread> pool;
-        pool.reserve(threads);
-        for (int i = 0; i < threads; i++) pool.emplace_back(worker);
-        for (auto &th : pool) th.join();
+        int rank_sum_k = 0;
+        for (const Task& t : tasks) {
+            SparseRectMatrix d_block = compile_block_differential_matrix(n, k, t.g, p, qsh, pow3, mb);
+            std::uint64_t seed = 1469598103934665603ULL
+                ^ (std::uint64_t)n * 1099511628211ULL
+                ^ (std::uint64_t)k * 1315423911ULL
+                ^ (std::uint64_t)t.g * 2654435761ULL;
+            int rk = rank_rectangular_wiedemann(d_block, p, repeats, threads, seed);
+            rank_sum_k += rk;
+        }
         auto k_end = std::chrono::high_resolution_clock::now();
 
-        rank_d[k] = rank_sum_k.load(std::memory_order_relaxed);
+        rank_d[k] = rank_sum_k;
         rank_time_k[k] = std::chrono::duration<double>(k_end - k_start).count();
+        std::cout << "[progress] finished d_" << k
+                  << " rank=" << rank_d[k]
+                  << " time=" << rank_time_k[k] << "s\n";
     }
     auto t3 = std::chrono::high_resolution_clock::now();
 

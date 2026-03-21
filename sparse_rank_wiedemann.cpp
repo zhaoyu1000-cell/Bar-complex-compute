@@ -43,6 +43,20 @@ static std::vector<Int> apply_sparse_matrix_transpose(const SparsePairMatrix& a,
     return y;
 }
 
+static SparsePairMatrix transpose_sparse_matrix(const SparsePairMatrix& a) {
+    const int n = static_cast<int>(a.size());
+    SparsePairMatrix at(n);
+    std::vector<int> counts(n, 0);
+    for (int i = 0; i < n; ++i) {
+        for (const auto& [j, _] : a[i]) ++counts[j];
+    }
+    for (int j = 0; j < n; ++j) at[j].reserve(counts[j]);
+    for (int i = 0; i < n; ++i) {
+        for (const auto& [j, v] : a[i]) at[j].push_back({i, v});
+    }
+    return at;
+}
+
 static int berlekamp_massey_linear_complexity(const std::vector<Int>& sequence, Int p) {
     std::vector<Int> c(1, 1), b(1, 1);
     int l = 0;
@@ -102,6 +116,7 @@ template <typename URBG>
 int rank_probabilistic(const SparsePairMatrix& a, Int p, URBG& rng, int repeats = 3) {
     const int n = static_cast<int>(a.size());
     if (n == 0) return 0;
+    const SparsePairMatrix at = transpose_sparse_matrix(a);
 
     std::uniform_int_distribution<Int> nz_dist(1, p - 1);
     std::uniform_int_distribution<Int> any_dist(0, p - 1);
@@ -120,7 +135,7 @@ int rank_probabilistic(const SparsePairMatrix& a, Int p, URBG& rng, int repeats 
             for (int i = 0; i < n; ++i) t[i] = (d2[i] * x[i]) % p;
             t = apply_sparse_matrix(a, t, p);
             for (int i = 0; i < n; ++i) t[i] = (d1[i] * t[i]) % p;
-            t = apply_sparse_matrix_transpose(a, t, p);
+            t = apply_sparse_matrix(at, t, p);
             for (int i = 0; i < n; ++i) t[i] = (d2[i] * t[i]) % p;
             return t;
         };
