@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <iostream>
 #include <random>
 #include <stdexcept>
 #include <utility>
@@ -117,6 +119,11 @@ int rank_probabilistic(const SparsePairMatrix& a, Int p, URBG& rng, int repeats 
     const int n = static_cast<int>(a.size());
     if (n == 0) return 0;
     const SparsePairMatrix at = transpose_sparse_matrix(a);
+    const int total_steps = std::max(1, repeats * 2 * n);
+    int done_steps = 0;
+    int next_progress = 10;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::cout << "[wiedemann] dims=(" << n << "," << n << ") progress=0% elapsed=0s\n";
 
     std::uniform_int_distribution<Int> nz_dist(1, p - 1);
     std::uniform_int_distribution<Int> any_dist(0, p - 1);
@@ -147,6 +154,14 @@ int rank_probabilistic(const SparsePairMatrix& a, Int p, URBG& rng, int repeats 
             for (int i = 0; i < n; ++i) sk = (sk + u[i] * w[i]) % p;
             sequence[k] = sk;
             w = apply_preconditioned_gram(w);
+            ++done_steps;
+            while (next_progress <= 100 && done_steps * 100 >= next_progress * total_steps) {
+                const auto now = std::chrono::steady_clock::now();
+                const double elapsed = std::chrono::duration<double>(now - t0).count();
+                std::cout << "[wiedemann] dims=(" << n << "," << n << ") progress="
+                          << next_progress << "% elapsed=" << elapsed << "s\n";
+                next_progress += 10;
+            }
         }
 
         int degree = berlekamp_massey_linear_complexity(sequence, p);
