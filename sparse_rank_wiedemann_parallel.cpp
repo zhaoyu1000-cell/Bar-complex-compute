@@ -89,20 +89,6 @@ static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix&
     return at;
 }
 
-static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix& a) {
-    const int n = static_cast<int>(a.size());
-    SparsePairMatrix at(n);
-    std::vector<int> counts(n, 0);
-    for (int i = 0; i < n; ++i) {
-        for (const auto& [j, _] : a[i]) ++counts[j];
-    }
-    for (int j = 0; j < n; ++j) at[j].reserve(counts[j]);
-    for (int i = 0; i < n; ++i) {
-        for (const auto& [j, v] : a[i]) at[j].push_back({i, v});
-    }
-    return at;
-}
-
 static Int dot_mod_parallel(const std::vector<Int>& u,
                             const std::vector<Int>& w,
                             Int p,
@@ -147,8 +133,6 @@ static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatri
                                                             Int p,
                                                             int threads) {
     const int n = static_cast<int>(a.size());
-    std::vector<Int> tmp1(n, 0);
-    std::vector<Int> tmp2(n, 0);
 
     tmp1.resize(n);
 #ifdef _OPENMP
@@ -158,7 +142,7 @@ static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatri
         tmp1[i] = (d2[i] * x[i]) % p;
     }
 
-    tmp2 = apply_sparse_matrix_parallel(a, tmp1, p, threads);
+    apply_sparse_matrix_parallel_to(a, tmp1, p, threads, tmp2);
 
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
@@ -167,17 +151,15 @@ static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatri
         tmp2[i] = (d1[i] * tmp2[i]) % p;
     }
 
-    tmp1 = apply_sparse_matrix_parallel(at, tmp2, p, threads);
+    t = apply_sparse_matrix_parallel(at, t, p, threads);
 
     out.resize(n);
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
     for (int i = 0; i < n; ++i) {
-        tmp1[i] = (d2[i] * tmp1[i]) % p;
+        out[i] = (d2[i] * tmp1[i]) % p;
     }
-
-    return tmp1;
 }
 
 // Parallelized Wiedemann rank estimator.
