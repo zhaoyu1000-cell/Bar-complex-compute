@@ -1,3 +1,6 @@
+#ifndef SPARSE_RANK_WIEDEMANN_PARALLEL_IMPL
+#define SPARSE_RANK_WIEDEMANN_PARALLEL_IMPL
+
 #include <algorithm>
 #include <cstdint>
 #include <random>
@@ -24,42 +27,16 @@ static int clamp_worker_count(int requested_threads) {
 #endif
     if (hw_threads <= 0) hw_threads = 1;
     if (requested_threads <= 0) return hw_threads;
-    return std::max(1, std::min(requested_threads, hw_threads));
+    return std::max(1, requested_threads);
 }
 
-static SparsePairMatrix transpose_sparse_matrix(const SparsePairMatrix& a) {
+static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix& a,
+                                                     const std::vector<Int>& x,
+                                                     Int p,
+                                                     int threads) {
     const int n = static_cast<int>(a.size());
-    SparsePairMatrix at(n);
+    std::vector<Int> y(n, 0);
 
-    std::vector<int> col_counts(n, 0);
-    for (int i = 0; i < n; ++i) {
-        for (const auto& [j, _] : a[i]) {
-            ++col_counts[j];
-        }
-    }
-
-    for (int j = 0; j < n; ++j) {
-        at[j].reserve(col_counts[j]);
-    }
-
-    for (int i = 0; i < n; ++i) {
-        for (const auto& [j, val] : a[i]) {
-            at[j].emplace_back(i, val);
-        }
-    }
-
-    return at;
-}
-
-static void apply_sparse_matrix_parallel_to(const SparsePairMatrix& a,
-                                            const std::vector<Int>& x,
-                                            Int p,
-                                            int threads,
-                                            std::vector<Int>& y) {
-    const int n = static_cast<int>(a.size());
-    y.resize(n);
-
-    constexpr Int kModuloRefresh = static_cast<Int>(1) << 60;
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #else
@@ -68,11 +45,12 @@ static void apply_sparse_matrix_parallel_to(const SparsePairMatrix& a,
     for (int i = 0; i < n; ++i) {
         Int acc = 0;
         for (const auto& [j, val] : a[i]) {
-            acc += val * x[j];
-            if (acc >= kModuloRefresh || acc <= -kModuloRefresh) acc %= p;
+            acc = (acc + val * x[j]) % p;
         }
-        y[i] = acc % p;
+        y[i] = acc;
     }
+
+    return y;
 }
 
 static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix& a) {
@@ -95,19 +73,16 @@ static Int dot_mod_parallel(const std::vector<Int>& u,
                             int threads) {
     const int n = static_cast<int>(u.size());
 #ifdef _OPENMP
-    const int actual_threads = std::max(1, threads);
-    std::vector<Int> partial(actual_threads, 0);
-#pragma omp parallel num_threads(actual_threads)
+    std::vector<Int> partial(std::max(1, threads), 0);
+#pragma omp parallel num_threads(threads)
     {
-        const int tid = omp_get_thread_num();
+        int tid = omp_get_thread_num();
         Int local = 0;
-        constexpr Int kModuloRefresh = static_cast<Int>(1) << 60;
 #pragma omp for schedule(static)
         for (int i = 0; i < n; ++i) {
-            local += u[i] * w[i];
-            if (local >= kModuloRefresh || local <= -kModuloRefresh) local %= p;
+            local = (local + u[i] * w[i]) % p;
         }
-        partial[tid] = local % p;
+        partial[tid] = local;
     }
 
     Int sum = 0;
@@ -116,12 +91,8 @@ static Int dot_mod_parallel(const std::vector<Int>& u,
 #else
     (void)threads;
     Int sum = 0;
-    constexpr Int kModuloRefresh = static_cast<Int>(1) << 60;
-    for (int i = 0; i < n; ++i) {
-        sum += u[i] * w[i];
-        if (sum >= kModuloRefresh || sum <= -kModuloRefresh) sum %= p;
-    }
-    return sum % p;
+    for (int i = 0; i < n; ++i) sum = (sum + u[i] * w[i]) % p;
+    return sum;
 #endif
 }
 
@@ -136,7 +107,6 @@ static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatri
     std::vector<Int> tmp1(n, 0);
     std::vector<Int> tmp2(n, 0);
 
-    tmp1.resize(n);
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
@@ -155,7 +125,6 @@ static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatri
 
     tmp1 = apply_sparse_matrix_parallel(at, tmp2, p, threads);
 
-    out.resize(n);
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
@@ -189,25 +158,21 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
     const SparsePairMatrix at = transpose_sparse_matrix_parallel(a);
 
     const int threads = clamp_worker_count(requested_threads);
-    const SparsePairMatrix at = transpose_sparse_matrix(a);
 
     std::uniform_int_distribution<Int> nz_dist(1, p - 1);
     std::uniform_int_distribution<Int> any_dist(0, p - 1);
 
-    std::vector<Int> d1(n), d2(n), u(n);
-    std::vector<Int> sequence(2 * n, 0);
-    std::vector<Int> w(n), next_w(n), tmp1(n), tmp2(n);
-
     int best_rank = 0;
     for (int rep = 0; rep < repeats; ++rep) {
+        std::vector<Int> d1(n), d2(n), u(n);
         for (int i = 0; i < n; ++i) {
             d1[i] = nz_dist(rng);
             d2[i] = nz_dist(rng);
             u[i] = any_dist(rng);
         }
 
-        std::fill(sequence.begin(), sequence.end(), 0);
-        w = u;
+        std::vector<Int> sequence(2 * n, 0);
+        std::vector<Int> w = u;
 
         for (int k = 0; k < 2 * n; ++k) {
             sequence[k] = dot_mod_parallel(u, w, p, threads);
@@ -233,3 +198,5 @@ int rank_probabilistic_parallel(const SparsePairMatrix& a,
 }
 
 }  // namespace sparse_wiedemann_parallel
+
+#endif  // SPARSE_RANK_WIEDEMANN_PARALLEL_IMPL
