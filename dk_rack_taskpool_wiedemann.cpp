@@ -85,7 +85,7 @@ int main(int argc,char** argv){
  if(P==0) P=pick_prime_1_mod_m(m); int base=dihedralN; Dihedral D(dihedralN); int64_t q_scalar=q_scalar_in_gfp(P,m,exp,sign); auto powB=powB_list(base,n);
 #ifdef _OPENMP
  omp_set_dynamic(0);
- if (nested_blocks) omp_set_max_active_levels(1);
+ if (nested_blocks) omp_set_max_active_levels(2);
 #endif
  std::cout<<"D_"<<dihedralN<<" n="<<n<<" P="<<P<<" q="<<q_scalar<<" repeats="<<repeats<<"\n";
  std::vector<std::vector<uint8_t>> op(base,std::vector<uint8_t>(base,0)); for(int i=0;i<base;i++){ int xi=D.reflection_gid(i); for(int j=0;j<base;j++){ int z=D.conj(xi,D.reflection_gid(j)); op[i][j]=(uint8_t)D.a_of(z);} }
@@ -97,11 +97,15 @@ int main(int argc,char** argv){
  std::vector<Task> tasks; tasks.reserve((size_t)(n-1)*cc.classes.size());
  for(int k=2;k<=n;k++) for(int cid=0; cid<(int)cc.classes.size(); cid++){ int rep=cc.rep[cid]; if(!mb.words_by_g[rep].empty()) tasks.push_back({k,rep,(int)cc.classes[cid].size()}); }
  std::atomic<int> next(0);
- int worker_count = nested_blocks ? std::max(1, threads / 3) : threads;
- worker_count = std::max(1, std::min(worker_count, (int)tasks.size()));
- int inner_wiedemann_threads = nested_blocks ? 2 : std::max(1, threads / worker_count);
- auto worker=[&](){ while(true){ int idx=next.fetch_add(1,std::memory_order_relaxed); if(idx>=(int)tasks.size()) return; const Task& t=tasks[idx]; auto ts=std::chrono::high_resolution_clock::now(); auto mat=compile_block_differential_matrix(n,P,qsh,powB,mb,kd[t.k],t.rep_g); int local_inner=inner_wiedemann_threads; std::uint64_t seed=1469598103934665603ULL ^ (std::uint64_t)t.k*1315423911ULL ^ (std::uint64_t)t.rep_g*2654435761ULL; int rk=rank_rectangular_wiedemann(mat,P,repeats,local_inner,seed); rank_sum[t.k].fetch_add((long long)rk*(long long)t.class_size,std::memory_order_relaxed); auto te=std::chrono::high_resolution_clock::now(); long long dt_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(te-ts).count(); time_ns_sum[t.k].fetch_add(dt_ns,std::memory_order_relaxed); }};
- std::vector<std::thread> pool; pool.reserve(worker_count); for(int t=0;t<worker_count;t++) pool.emplace_back(worker); for(auto& th:pool) th.join();
+ int outer_worker_count = nested_blocks ? std::max(1, threads / 3) : threads;
+ outer_worker_count = std::max(1, std::min(outer_worker_count, (int)tasks.size()));
+ int inner_threads_per_worker = nested_blocks ? 2 : std::max(1, threads / outer_worker_count);
+ int inner_worker_budget = outer_worker_count * inner_threads_per_worker;
+ std::cout<<"outer_workers="<<outer_worker_count
+          <<" inner_threads_per_worker="<<inner_threads_per_worker
+          <<" inner_worker_budget="<<inner_worker_budget<<"\n";
+ auto worker=[&](){ while(true){ int idx=next.fetch_add(1,std::memory_order_relaxed); if(idx>=(int)tasks.size()) return; const Task& t=tasks[idx]; auto ts=std::chrono::high_resolution_clock::now(); auto mat=compile_block_differential_matrix(n,P,qsh,powB,mb,kd[t.k],t.rep_g); int local_inner=inner_threads_per_worker; std::uint64_t seed=1469598103934665603ULL ^ (std::uint64_t)t.k*1315423911ULL ^ (std::uint64_t)t.rep_g*2654435761ULL; int rk=rank_rectangular_wiedemann(mat,P,repeats,local_inner,seed); rank_sum[t.k].fetch_add((long long)rk*(long long)t.class_size,std::memory_order_relaxed); auto te=std::chrono::high_resolution_clock::now(); long long dt_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(te-ts).count(); time_ns_sum[t.k].fetch_add(dt_ns,std::memory_order_relaxed); }};
+ std::vector<std::thread> pool; pool.reserve(outer_worker_count); for(int t=0;t<outer_worker_count;t++) pool.emplace_back(worker); for(auto& th:pool) th.join();
  std::vector<__int128> rank_d(n+2,0); std::vector<double> time_d(n+2,0.0);
  for(int k=2;k<=n;k++){ rank_d[k]=(__int128)rank_sum[k].load(std::memory_order_relaxed); time_d[k]=(double)time_ns_sum[k].load(std::memory_order_relaxed)/1e9; std::cout<<"rank(d_"<<k<<")="<<(long long)rank_d[k]<<" time="<<time_d[k]<<"s\n"; }
  auto t2=std::chrono::high_resolution_clock::now();
