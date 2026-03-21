@@ -89,20 +89,6 @@ static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix&
     return at;
 }
 
-static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix& a) {
-    const int n = static_cast<int>(a.size());
-    SparsePairMatrix at(n);
-    std::vector<int> counts(n, 0);
-    for (int i = 0; i < n; ++i) {
-        for (const auto& [j, _] : a[i]) ++counts[j];
-    }
-    for (int j = 0; j < n; ++j) at[j].reserve(counts[j]);
-    for (int i = 0; i < n; ++i) {
-        for (const auto& [j, v] : a[i]) at[j].push_back({i, v});
-    }
-    return at;
-}
-
 static Int dot_mod_parallel(const std::vector<Int>& u,
                             const std::vector<Int>& w,
                             Int p,
