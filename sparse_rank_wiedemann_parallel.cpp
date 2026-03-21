@@ -33,9 +33,9 @@ static int clamp_worker_count(int requested_threads) {
 }
 
 static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix& a,
-                                                      const std::vector<Int>& x,
-                                                      Int p,
-                                                      int threads) {
+                                                     const std::vector<Int>& x,
+                                                     Int p,
+                                                     int threads) {
     const int n = static_cast<int>(a.size());
     std::vector<Int> y(n, 0);
 
