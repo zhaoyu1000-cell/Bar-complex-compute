@@ -96,6 +96,20 @@ static std::vector<Int> apply_sparse_matrix_transpose_parallel(const SparsePairM
 #endif
 }
 
+static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix& a) {
+    const int n = static_cast<int>(a.size());
+    SparsePairMatrix at(n);
+    std::vector<int> counts(n, 0);
+    for (int i = 0; i < n; ++i) {
+        for (const auto& [j, _] : a[i]) ++counts[j];
+    }
+    for (int j = 0; j < n; ++j) at[j].reserve(counts[j]);
+    for (int i = 0; i < n; ++i) {
+        for (const auto& [j, v] : a[i]) at[j].push_back({i, v});
+    }
+    return at;
+}
+
 static Int dot_mod_parallel(const std::vector<Int>& u,
                             const std::vector<Int>& w,
                             Int p,
@@ -126,40 +140,42 @@ static Int dot_mod_parallel(const std::vector<Int>& u,
 }
 
 static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatrix& a,
+                                                            const SparsePairMatrix& at,
                                                             const std::vector<Int>& x,
                                                             const std::vector<Int>& d1,
                                                             const std::vector<Int>& d2,
                                                             Int p,
                                                             int threads) {
     const int n = static_cast<int>(a.size());
-    std::vector<Int> t(n);
+    std::vector<Int> tmp1(n, 0);
+    std::vector<Int> tmp2(n, 0);
 
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
     for (int i = 0; i < n; ++i) {
-        t[i] = (d2[i] * x[i]) % p;
+        tmp1[i] = (d2[i] * x[i]) % p;
     }
 
-    t = apply_sparse_matrix_parallel(a, t, p, threads);
+    tmp2 = apply_sparse_matrix_parallel(a, tmp1, p, threads);
 
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
     for (int i = 0; i < n; ++i) {
-        t[i] = (d1[i] * t[i]) % p;
+        tmp2[i] = (d1[i] * tmp2[i]) % p;
     }
 
-    t = apply_sparse_matrix_transpose_parallel(a, t, p, threads);
+    tmp1 = apply_sparse_matrix_parallel(at, tmp2, p, threads);
 
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
     for (int i = 0; i < n; ++i) {
-        t[i] = (d2[i] * t[i]) % p;
+        tmp1[i] = (d2[i] * tmp1[i]) % p;
     }
 
-    return t;
+    return tmp1;
 }
 
 // Parallelized Wiedemann rank estimator.
@@ -182,6 +198,7 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
 
     const int n = static_cast<int>(a.size());
     if (n == 0) return 0;
+    const SparsePairMatrix at = transpose_sparse_matrix_parallel(a);
 
     const int threads = clamp_worker_count(requested_threads);
 
@@ -202,7 +219,7 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
 
         for (int k = 0; k < 2 * n; ++k) {
             sequence[k] = dot_mod_parallel(u, w, p, threads);
-            w = apply_preconditioned_gram_parallel(a, w, d1, d2, p, threads);
+            w = apply_preconditioned_gram_parallel(a, at, w, d1, d2, p, threads);
         }
 
         int degree = sparse_wiedemann::berlekamp_massey_linear_complexity(sequence, p);
