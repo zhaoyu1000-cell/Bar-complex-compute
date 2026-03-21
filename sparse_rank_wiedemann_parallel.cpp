@@ -75,6 +75,20 @@ static void apply_sparse_matrix_parallel_to(const SparsePairMatrix& a,
     }
 }
 
+static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix& a) {
+    const int n = static_cast<int>(a.size());
+    SparsePairMatrix at(n);
+    std::vector<int> counts(n, 0);
+    for (int i = 0; i < n; ++i) {
+        for (const auto& [j, _] : a[i]) ++counts[j];
+    }
+    for (int j = 0; j < n; ++j) at[j].reserve(counts[j]);
+    for (int i = 0; i < n; ++i) {
+        for (const auto& [j, v] : a[i]) at[j].push_back({i, v});
+    }
+    return at;
+}
+
 static Int dot_mod_parallel(const std::vector<Int>& u,
                             const std::vector<Int>& w,
                             Int p,
@@ -111,16 +125,13 @@ static Int dot_mod_parallel(const std::vector<Int>& u,
 #endif
 }
 
-static void apply_preconditioned_gram_parallel_with_transpose(const SparsePairMatrix& a,
-                                                               const SparsePairMatrix& at,
-                                                               const std::vector<Int>& x,
-                                                               const std::vector<Int>& d1,
-                                                               const std::vector<Int>& d2,
-                                                               Int p,
-                                                               int threads,
-                                                               std::vector<Int>& tmp1,
-                                                               std::vector<Int>& tmp2,
-                                                               std::vector<Int>& out) {
+static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatrix& a,
+                                                            const SparsePairMatrix& at,
+                                                            const std::vector<Int>& x,
+                                                            const std::vector<Int>& d1,
+                                                            const std::vector<Int>& d2,
+                                                            Int p,
+                                                            int threads) {
     const int n = static_cast<int>(a.size());
 
     tmp1.resize(n);
@@ -140,7 +151,7 @@ static void apply_preconditioned_gram_parallel_with_transpose(const SparsePairMa
         tmp2[i] = (d1[i] * tmp2[i]) % p;
     }
 
-    apply_sparse_matrix_parallel_to(at, tmp2, p, threads, tmp1);
+    t = apply_sparse_matrix_parallel(at, t, p, threads);
 
     out.resize(n);
 #ifdef _OPENMP
@@ -171,6 +182,7 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
 
     const int n = static_cast<int>(a.size());
     if (n == 0) return 0;
+    const SparsePairMatrix at = transpose_sparse_matrix_parallel(a);
 
     const int threads = clamp_worker_count(requested_threads);
     const SparsePairMatrix at = transpose_sparse_matrix(a);
@@ -195,17 +207,7 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
 
         for (int k = 0; k < 2 * n; ++k) {
             sequence[k] = dot_mod_parallel(u, w, p, threads);
-            apply_preconditioned_gram_parallel_with_transpose(a,
-                                                              at,
-                                                              w,
-                                                              d1,
-                                                              d2,
-                                                              p,
-                                                              threads,
-                                                              tmp1,
-                                                              tmp2,
-                                                              next_w);
-            w.swap(next_w);
+            w = apply_preconditioned_gram_parallel(a, at, w, d1, d2, p, threads);
         }
 
         int degree = sparse_wiedemann::berlekamp_massey_linear_complexity(sequence, p);

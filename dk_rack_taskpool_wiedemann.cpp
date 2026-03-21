@@ -16,7 +16,11 @@
 #include <utility>
 #include <vector>
 
-#include "sparse_rank_wiedemann.cpp"
+#include "sparse_rank_wiedemann_parallel.cpp"
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 using std::int64_t;
 // (same utilities as provided)
@@ -71,14 +75,18 @@ static SparseWiedemannInput compile_block_differential_matrix(int n,int64_t P,co
  for(int ci=0; ci<(int)kd.comps_k.size(); ci++){ const auto& sp=kd.specs[ci]; for(int c=0;c<B;c++){ int col=ci*B+c; int64_t wid=words[c]; touched.clear(); stamp++; if(stamp==0){ std::fill(mark.begin(),mark.end(),0); stamp=1; } for(const auto& ms:sp){ int64_t u=(wid/powB[ms.start])%powB[ms.p_len]; int64_t v=(wid/powB[ms.start+ms.p_len])%powB[ms.q_len]; int64_t idx=u*powB[ms.q_len]+v; const auto& lst=qsh[ms.p_len][ms.q_len].data[(size_t)idx]; int row_base=ms.new_pos*B; for(const auto& ow:lst){ int64_t out_id=ow.first, coeff=ow.second; int64_t val=(int64_t)((__int128)ms.sgn*coeff%P); if(!val) continue; int64_t new_wid=replace_segment(wid,ms.start,ms.out_len,out_id,powB); int row=row_base+idx_map(new_wid); if(mark[row]!=stamp){ mark[row]=stamp; touched.push_back(row);} int64_t nv=(acc[row]+val)%P; if(nv<0) nv+=P; acc[row]=nv; } } std::sort(touched.begin(),touched.end()); for(int r:touched){ int64_t cval=acc[r]; if(cval) mat.sq[r].push_back({col,cval}); acc[r]=0; } }}
  return mat; }
 
-static int rank_rectangular_wiedemann(const SparseWiedemannInput& d,int64_t P,int repeats,int /*threads*/,std::uint64_t seed){ if(d.sq.empty()) return 0; std::mt19937_64 rng(seed); return sparse_wiedemann::rank_probabilistic(d.sq,P,rng,repeats); }
+static int rank_rectangular_wiedemann(const SparseWiedemannInput& d,int64_t P,int repeats,int threads,std::uint64_t seed){ if(d.sq.empty()) return 0; return sparse_wiedemann_parallel::rank_probabilistic_parallel(d.sq,P,repeats,threads,seed); }
 
 struct Task{int k; int rep_g; int class_size;};
 int main(int argc,char** argv){
- int dihedralN=5,n=5,threads=8,only_k=-1,sign=-1,repeats=1; int64_t m=1,exp=1,P=0;
+ int dihedralN=5,n=5,threads=8,only_k=-1,sign=-1,repeats=1,nested_blocks=0; int64_t m=1,exp=1,P=0;
  for(int i=1;i<argc;i++){ std::string s=argv[i]; auto need=[&](const char* opt){ if(i+1>=argc) throw std::runtime_error(std::string("Missing ")+opt); return std::string(argv[++i]);};
- if(s=="--dihedral") dihedralN=std::stoi(need("--dihedral")); else if(s=="--n") n=std::stoi(need("--n")); else if(s=="--threads") threads=std::stoi(need("--threads")); else if(s=="--only-k") only_k=std::stoi(need("--only-k")); else if(s=="--root-order") m=std::stoll(need("--root-order")); else if(s=="--root-exp") exp=std::stoll(need("--root-exp")); else if(s=="--sign") sign=std::stoi(need("--sign")); else if(s=="--prime") P=std::stoll(need("--prime")); else if(s=="--repeats") repeats=std::stoi(need("--repeats")); else throw std::runtime_error("Unknown"); }
+ if(s=="--dihedral") dihedralN=std::stoi(need("--dihedral")); else if(s=="--n") n=std::stoi(need("--n")); else if(s=="--threads") threads=std::stoi(need("--threads")); else if(s=="--only-k") only_k=std::stoi(need("--only-k")); else if(s=="--root-order") m=std::stoll(need("--root-order")); else if(s=="--root-exp") exp=std::stoll(need("--root-exp")); else if(s=="--sign") sign=std::stoi(need("--sign")); else if(s=="--prime") P=std::stoll(need("--prime")); else if(s=="--repeats") repeats=std::stoi(need("--repeats")); else if(s=="--nested-blocks") nested_blocks=std::stoi(need("--nested-blocks")); else throw std::runtime_error("Unknown"); }
  if(P==0) P=pick_prime_1_mod_m(m); int base=dihedralN; Dihedral D(dihedralN); int64_t q_scalar=q_scalar_in_gfp(P,m,exp,sign); auto powB=powB_list(base,n);
+#ifdef _OPENMP
+ omp_set_dynamic(0);
+ if (nested_blocks) omp_set_max_active_levels(1);
+#endif
  std::cout<<"D_"<<dihedralN<<" n="<<n<<" P="<<P<<" q="<<q_scalar<<" repeats="<<repeats<<"\n";
  std::vector<std::vector<uint8_t>> op(base,std::vector<uint8_t>(base,0)); for(int i=0;i<base;i++){ int xi=D.reflection_gid(i); for(int j=0;j<base;j++){ int z=D.conj(xi,D.reflection_gid(j)); op[i][j]=(uint8_t)D.a_of(z);} }
  MonoBlocks mb=monodromy_blocks_Dn(n,base,powB,D); ConjClasses cc=conjugacy_classes(D);
@@ -89,8 +97,10 @@ int main(int argc,char** argv){
  std::vector<Task> tasks; tasks.reserve((size_t)(n-1)*cc.classes.size());
  for(int k=2;k<=n;k++) for(int cid=0; cid<(int)cc.classes.size(); cid++){ int rep=cc.rep[cid]; if(!mb.words_by_g[rep].empty()) tasks.push_back({k,rep,(int)cc.classes[cid].size()}); }
  std::atomic<int> next(0);
- int worker_count=std::max(1,std::min(threads,(int)tasks.size()));
- auto worker=[&](){ while(true){ int idx=next.fetch_add(1,std::memory_order_relaxed); if(idx>=(int)tasks.size()) return; const Task& t=tasks[idx]; auto ts=std::chrono::high_resolution_clock::now(); auto mat=compile_block_differential_matrix(n,P,qsh,powB,mb,kd[t.k],t.rep_g); std::uint64_t seed=1469598103934665603ULL ^ (std::uint64_t)t.k*1315423911ULL ^ (std::uint64_t)t.rep_g*2654435761ULL; int rk=rank_rectangular_wiedemann(mat,P,repeats,threads,seed); rank_sum[t.k].fetch_add((long long)rk*(long long)t.class_size,std::memory_order_relaxed); auto te=std::chrono::high_resolution_clock::now(); long long dt_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(te-ts).count(); time_ns_sum[t.k].fetch_add(dt_ns,std::memory_order_relaxed); }};
+ int worker_count = nested_blocks ? std::max(1, threads / 3) : threads;
+ worker_count = std::max(1, std::min(worker_count, (int)tasks.size()));
+ int inner_wiedemann_threads = nested_blocks ? 2 : std::max(1, threads / worker_count);
+ auto worker=[&](){ while(true){ int idx=next.fetch_add(1,std::memory_order_relaxed); if(idx>=(int)tasks.size()) return; const Task& t=tasks[idx]; auto ts=std::chrono::high_resolution_clock::now(); auto mat=compile_block_differential_matrix(n,P,qsh,powB,mb,kd[t.k],t.rep_g); int local_inner=inner_wiedemann_threads; std::uint64_t seed=1469598103934665603ULL ^ (std::uint64_t)t.k*1315423911ULL ^ (std::uint64_t)t.rep_g*2654435761ULL; int rk=rank_rectangular_wiedemann(mat,P,repeats,local_inner,seed); rank_sum[t.k].fetch_add((long long)rk*(long long)t.class_size,std::memory_order_relaxed); auto te=std::chrono::high_resolution_clock::now(); long long dt_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(te-ts).count(); time_ns_sum[t.k].fetch_add(dt_ns,std::memory_order_relaxed); }};
  std::vector<std::thread> pool; pool.reserve(worker_count); for(int t=0;t<worker_count;t++) pool.emplace_back(worker); for(auto& th:pool) th.join();
  std::vector<__int128> rank_d(n+2,0); std::vector<double> time_d(n+2,0.0);
  for(int k=2;k<=n;k++){ rank_d[k]=(__int128)rank_sum[k].load(std::memory_order_relaxed); time_d[k]=(double)time_ns_sum[k].load(std::memory_order_relaxed)/1e9; std::cout<<"rank(d_"<<k<<")="<<(long long)rank_d[k]<<" time="<<time_d[k]<<"s\n"; }
