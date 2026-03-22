@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <random>
 #include <unordered_set>
 #include <utility>
@@ -116,7 +117,8 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    const std::vector<int> thread_counts = {1, 2, 4, 8};
+    std::vector<int> thread_counts(4);
+    std::iota(thread_counts.begin(), thread_counts.end(), 1);
 
     std::random_device rd;
     std::mt19937_64 rng(rd());
