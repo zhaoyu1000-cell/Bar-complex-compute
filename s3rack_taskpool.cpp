@@ -3,8 +3,8 @@
 // Computes rank(d_k) by summing block ranks, then outputs H^j.
 
 // Build: g++ -O3 -std=c++20 -march=native -pipe -pthread s3rack_taskpool.cpp -o s3rack_taskpool
-// Run:   ./s3rack_taskpool --n 6 --root-order 1 --sign 1 --prime 1000003 --threads 8
-//        ./s3rack_taskpool --n 6 --root-order 1 --sign -1 --prime 1000003 --threads 8
+// Run:   ./s3rack_taskpool --n 6 --root-order 1 --sign 1 --prime 100003 --threads 8
+//        ./s3rack_taskpool --n 6 --root-order 1 --sign -1 --prime 100003 --threads 8
 //        ./s3rack_taskpool --n 6 --root-order 12 --root-exp 1 --sign 1 --threads 8
 
 #include <algorithm>
@@ -73,7 +73,7 @@ static int64_t primitive_root_mod_prime(int64_t p) {
     throw std::runtime_error("No primitive root found");
 }
 static int64_t pick_prime_1_mod_m(int64_t m, int64_t start = 1000000) {
-    if (m == 1) return 1000003;
+    if (m == 1) return 100003;
     int64_t t = (start - 1) / m + 1;
     while (true) {
         int64_t cand = m * t + 1;

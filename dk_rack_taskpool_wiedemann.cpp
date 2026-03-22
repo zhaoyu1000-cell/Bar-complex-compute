@@ -82,7 +82,7 @@ static int64_t primitive_root_mod_prime(int64_t p) {
 }
 static int64_t pick_prime_1_mod_m(int64_t m, int64_t start = 1000000) {
   if (m == 1)
-    return 1000003;
+    return 100003;
   int64_t t = (start - 1) / m + 1;
   while (true) {
     int64_t cand = m * t + 1;

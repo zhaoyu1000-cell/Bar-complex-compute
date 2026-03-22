@@ -59,8 +59,16 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
     const int end = std::min(n, begin + chunk);
     for (int i = begin; i < end; ++i) {
       Int acc = 0;
-      for (const auto &[j, val] : a[i]) {
-        acc += val * x[j];
+      const auto &row = a[i];
+      const auto *row_ptr = row.data();
+      const int m = static_cast<int>(row.size());
+      int t = 0;
+      for (; t + 1 < m; t += 2) {
+        acc += row_ptr[t].second * x[row_ptr[t].first];
+        acc += row_ptr[t + 1].second * x[row_ptr[t + 1].first];
+      }
+      for (; t < m; ++t) {
+        acc += row_ptr[t].second * x[row_ptr[t].first];
       }
       y[i] = acc % kCompilePrime;
     }
@@ -69,8 +77,16 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
   (void)threads;
   for (int i = 0; i < n; ++i) {
     Int acc = 0;
-    for (const auto &[j, val] : a[i]) {
-      acc += val * x[j];
+    const auto &row = a[i];
+    const auto *row_ptr = row.data();
+    const int m = static_cast<int>(row.size());
+    int t = 0;
+    for (; t + 1 < m; t += 2) {
+      acc += row_ptr[t].second * x[row_ptr[t].first];
+      acc += row_ptr[t + 1].second * x[row_ptr[t + 1].first];
+    }
+    for (; t < m; ++t) {
+      acc += row_ptr[t].second * x[row_ptr[t].first];
     }
     y[i] = acc % kCompilePrime;
   }
