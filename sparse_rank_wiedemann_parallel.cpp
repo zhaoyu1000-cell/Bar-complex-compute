@@ -23,15 +23,20 @@ using SparsePairMatrix = sparse_wiedemann::SparsePairMatrix;
 
 static int clamp_worker_count(int requested_threads) {
 #ifdef _OPENMP
-    int hw_threads = omp_get_max_threads();
+  // When OpenMP is available, respect runtime max threads unless an explicit
+  // request is made.
+  int hw_threads = omp_get_max_threads();
 #else
-    int hw_threads = 1;
+  // Fallback path: no OpenMP support compiled in, so only one worker is valid.
+  int hw_threads = 1;
 #endif
-    if (hw_threads <= 0) hw_threads = 1;
-    if (requested_threads <= 0) return hw_threads;
-    return std::max(1, requested_threads);
+  if (hw_threads <= 0) hw_threads = 1;
+  if (requested_threads <= 0) return hw_threads;
+  return std::max(1, requested_threads);
 }
 
+// Sparse matrix-vector multiply y = A*x (mod p), parallelized over rows.
+// Matrix is stored as list-of-rows, where each row is (col, value) tuples.
 static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix& a,
                                                      const std::vector<Int>& x,
                                                      Int p,
@@ -55,6 +60,8 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix& a,
     return y;
 }
 
+// Build and cache the transpose AT in the same list-of-rows sparse format.
+// This avoids re-scanning A each time we need an AT*x multiply.
 static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix& a) {
     const int n = static_cast<int>(a.size());
     SparsePairMatrix at(n);
@@ -69,6 +76,8 @@ static SparsePairMatrix transpose_sparse_matrix_parallel(const SparsePairMatrix&
     return at;
 }
 
+// Parallel modular dot product <u,w> mod p.
+// Used to generate the Krylov sequence values in Wiedemann.
 static Int dot_mod_parallel(const std::vector<Int>& u,
                             const std::vector<Int>& w,
                             Int p,
@@ -98,6 +107,10 @@ static Int dot_mod_parallel(const std::vector<Int>& u,
 #endif
 }
 
+// Apply preconditioned Gram operator:
+//   x -> D2 * AT * D1 * A * D2 * x  (all mod p)
+// where D1,D2 are random nonzero diagonal scalings.
+// This is the black-box operator used by probabilistic Wiedemann rank.
 static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatrix& a,
                                                             const SparsePairMatrix& at,
                                                             const std::vector<Int>& x,
@@ -112,27 +125,32 @@ static std::vector<Int> apply_preconditioned_gram_parallel(const SparsePairMatri
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
-    for (int i = 0; i < n; ++i) {
-        tmp1[i] = (d2[i] * x[i]) % p;
-    }
+  for (int i = 0; i < n; ++i) {
+    // First diagonal scaling by D2.
+    tmp1[i] = (d2[i] * x[i]) % p;
+  }
 
-    tmp2 = apply_sparse_matrix_parallel(a, tmp1, p, threads);
-
-#ifdef _OPENMP
-#pragma omp parallel for num_threads(threads) schedule(static)
-#endif
-    for (int i = 0; i < n; ++i) {
-        tmp2[i] = (d1[i] * tmp2[i]) % p;
-    }
-
-    tmp1 = apply_sparse_matrix_parallel(at, tmp2, p, threads);
+  // Sparse SpMV by A.
+  tmp2 = apply_sparse_matrix_parallel(a, tmp1, p, threads);
 
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(threads) schedule(static)
 #endif
-    for (int i = 0; i < n; ++i) {
-        tmp1[i] = (d2[i] * tmp1[i]) % p;
-    }
+  for (int i = 0; i < n; ++i) {
+    // Middle diagonal scaling by D1.
+    tmp2[i] = (d1[i] * tmp2[i]) % p;
+  }
+
+  // Sparse SpMV by AT (precomputed transpose).
+  tmp1 = apply_sparse_matrix_parallel(at, tmp2, p, threads);
+
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(threads) schedule(static)
+#endif
+  for (int i = 0; i < n; ++i) {
+    // Final diagonal scaling by D2.
+    tmp1[i] = (d2[i] * tmp1[i]) % p;
+  }
 
     return tmp1;
 }
@@ -155,9 +173,10 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
         throw std::invalid_argument("repeats must be positive");
     }
 
-    const int n = static_cast<int>(a.size());
-    if (n == 0) return 0;
-    const SparsePairMatrix at = transpose_sparse_matrix_parallel(a);
+  const int n = static_cast<int>(a.size());
+  if (n == 0) return 0;
+  // Precompute AT once per rank call.
+  const SparsePairMatrix at = transpose_sparse_matrix_parallel(a);
     const int total_steps = std::max(1, repeats * 2 * n);
     int done_steps = 0;
     int next_progress = 10;
@@ -169,21 +188,23 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
     std::uniform_int_distribution<Int> nz_dist(1, p - 1);
     std::uniform_int_distribution<Int> any_dist(0, p - 1);
 
-    int best_rank = 0;
-    for (int rep = 0; rep < repeats; ++rep) {
-        std::vector<Int> d1(n), d2(n), u(n);
+  int best_rank = 0;
+  for (int rep = 0; rep < repeats; ++rep) {
+    // Fresh random diagonal preconditioners and probe vector each repeat.
+    std::vector<Int> d1(n), d2(n), u(n);
         for (int i = 0; i < n; ++i) {
             d1[i] = nz_dist(rng);
             d2[i] = nz_dist(rng);
             u[i] = any_dist(rng);
         }
 
-        std::vector<Int> sequence(2 * n, 0);
-        std::vector<Int> w = u;
+    std::vector<Int> sequence(2 * n, 0);
+    std::vector<Int> w = u;
 
-        for (int k = 0; k < 2 * n; ++k) {
-            sequence[k] = dot_mod_parallel(u, w, p, threads);
-            w = apply_preconditioned_gram_parallel(a, at, w, d1, d2, p, threads);
+    for (int k = 0; k < 2 * n; ++k) {
+      // Krylov sequence term s_k = <u, M^k u> where M is black-box operator.
+      sequence[k] = dot_mod_parallel(u, w, p, threads);
+      w = apply_preconditioned_gram_parallel(a, at, w, d1, d2, p, threads);
             ++done_steps;
             while (next_progress <= 100 && done_steps * 100 >= next_progress * total_steps) {
                 const auto now = std::chrono::steady_clock::now();
@@ -194,8 +215,9 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix& a,
             }
         }
 
-        int degree = sparse_wiedemann::berlekamp_massey_linear_complexity(sequence, p);
-        int estimate = (degree == n) ? n : std::max(0, degree - 1);
+    int degree = sparse_wiedemann::berlekamp_massey_linear_complexity(sequence, p);
+    // Rank estimate from linear complexity heuristic used in this codebase.
+    int estimate = (degree == n) ? n : std::max(0, degree - 1);
         best_rank = std::max(best_rank, estimate);
         if (best_rank == n) break;
     }
