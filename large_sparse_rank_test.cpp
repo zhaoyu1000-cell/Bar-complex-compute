@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <random>
 #include <unordered_set>
 #include <utility>
