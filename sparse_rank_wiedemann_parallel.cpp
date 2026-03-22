@@ -2,7 +2,6 @@
 #define SPARSE_RANK_WIEDEMANN_PARALLEL_IMPL
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -44,10 +43,9 @@ static int clamp_worker_count(int requested_threads) {
 static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
                                                      const std::vector<Int> &x,
                                                      Int p, int threads) {
+  (void)p;
   const int n = static_cast<int>(a.size());
   std::vector<Int> y(n, 0);
-  const bool use_compile_prime = (p == kCompilePrime);
-  const Int mod = use_compile_prime ? kCompilePrime : p;
 
 #ifdef _OPENMP
   // Explicit contiguous block partition:
@@ -64,7 +62,7 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
       for (const auto &[j, val] : a[i]) {
         acc += val * x[j];
       }
-      y[i] = acc % mod;
+      y[i] = acc % kCompilePrime;
     }
   }
 #else
@@ -74,7 +72,7 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
     for (const auto &[j, val] : a[i]) {
       acc += val * x[j];
     }
-    y[i] = acc % mod;
+    y[i] = acc % kCompilePrime;
   }
 #endif
 
@@ -105,9 +103,8 @@ transpose_sparse_matrix_parallel(const SparsePairMatrix &a) {
 // Used to generate the Krylov sequence values in Wiedemann.
 static Int dot_mod_parallel(const std::vector<Int> &u,
                             const std::vector<Int> &w, Int p, int threads) {
+  (void)p;
   const int n = static_cast<int>(u.size());
-  const bool use_compile_prime = (p == kCompilePrime);
-  const Int mod = use_compile_prime ? kCompilePrime : p;
 #ifdef _OPENMP
   std::vector<Int> partial(std::max(1, threads), 0);
 #pragma omp parallel num_threads(threads)
@@ -118,20 +115,20 @@ static Int dot_mod_parallel(const std::vector<Int> &u,
     for (int i = 0; i < n; ++i) {
       local += u[i] * w[i];
     }
-    partial[tid] = local % mod;
+    partial[tid] = local % kCompilePrime;
   }
 
   Int sum = 0;
   for (Int v : partial)
     sum += v;
-  return sum % mod;
+  return sum % kCompilePrime;
 #else
   (void)threads;
   Int sum = 0;
   for (int i = 0; i < n; ++i) {
     sum += u[i] * w[i];
   }
-  return sum % mod;
+  return sum % kCompilePrime;
 #endif
 }
 
@@ -152,7 +149,7 @@ static std::vector<Int> apply_preconditioned_gram_parallel(
 #endif
   for (int i = 0; i < n; ++i) {
     // First diagonal scaling by D2.
-    tmp1[i] = (d2[i] * x[i]) % p;
+    tmp1[i] = d2[i] * x[i];
   }
 
   // Sparse SpMV by A.
@@ -163,7 +160,7 @@ static std::vector<Int> apply_preconditioned_gram_parallel(
 #endif
   for (int i = 0; i < n; ++i) {
     // Middle diagonal scaling by D1.
-    tmp2[i] = (d1[i] * tmp2[i]) % p;
+    tmp2[i] = d1[i] * tmp2[i];
   }
 
   // Sparse SpMV by AT (precomputed transpose).
@@ -174,7 +171,7 @@ static std::vector<Int> apply_preconditioned_gram_parallel(
 #endif
   for (int i = 0; i < n; ++i) {
     // Final diagonal scaling by D2.
-    tmp1[i] = (d2[i] * tmp1[i]) % p;
+    tmp1[i] = (d2[i] * tmp1[i]) % kCompilePrime;
   }
 
   return tmp1;
@@ -194,15 +191,11 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix &a,
     throw std::invalid_argument("Modulus p must be an odd prime > 2");
   }
   if (p != kCompilePrime) {
-    static std::atomic<bool> runtime_prime_notice_printed{false};
-    if (!runtime_prime_notice_printed.exchange(true,
-                                               std::memory_order_relaxed)) {
-      std::cout << "[wiedemann_parallel] using runtime prime p=" << p
-                << " (compile prime is " << kCompilePrime << ")\n";
-    }
+    std::cerr << "[wiedemann_parallel] alert: requested prime p=" << p
+              << " but this build is fixed to compile prime " << kCompilePrime
+              << ". Exiting.\n";
+    throw std::invalid_argument("Prime mismatch with compile-time prime");
   }
-  // If p == kCompilePrime we still benefit from the compile-prime path in
-  // low-level kernels; otherwise kernels use the runtime modulus p.
   if (repeats <= 0) {
     throw std::invalid_argument("repeats must be positive");
   }
