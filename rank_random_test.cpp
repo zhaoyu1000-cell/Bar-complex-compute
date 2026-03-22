@@ -100,7 +100,7 @@ int main() {
     constexpr int N = 100;
     constexpr int M = 1000;
     constexpr int TRIALS = 25;
-    constexpr int64 P = 1000003;  // prime modulus
+    constexpr int64 P = 100003;  // prime modulus
 
     std::random_device rd;
     std::mt19937_64 rng(rd());

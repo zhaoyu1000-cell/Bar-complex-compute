@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
     constexpr int K = 4;
     constexpr int N = 10000;                 // 10^4
     constexpr int MAX_NONZERO_PER_ROW = 10;
-    constexpr int64 P = 1000003;             // prime
+    constexpr int64 P = 100003;             // prime
     constexpr int WIEDEMANN_REPEATS = 5;
 
     int trials = 1;
