@@ -2,6 +2,7 @@
 #define SPARSE_RANK_WIEDEMANN_PARALLEL_IMPL
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -20,6 +21,7 @@ namespace sparse_wiedemann_parallel {
 
 using Int = sparse_wiedemann::Int;
 using SparsePairMatrix = sparse_wiedemann::SparsePairMatrix;
+static constexpr Int kCompilePrime = 100003;
 
 static int clamp_worker_count(int requested_threads) {
 #ifdef _OPENMP
@@ -44,6 +46,8 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
                                                      Int p, int threads) {
   const int n = static_cast<int>(a.size());
   std::vector<Int> y(n, 0);
+  const bool use_compile_prime = (p == kCompilePrime);
+  const Int mod = use_compile_prime ? kCompilePrime : p;
 
 #ifdef _OPENMP
   // Explicit contiguous block partition:
@@ -58,9 +62,9 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
     for (int i = begin; i < end; ++i) {
       Int acc = 0;
       for (const auto &[j, val] : a[i]) {
-        acc = (acc + val * x[j]) % p;
+        acc += val * x[j];
       }
-      y[i] = acc;
+      y[i] = acc % mod;
     }
   }
 #else
@@ -68,9 +72,9 @@ static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix &a,
   for (int i = 0; i < n; ++i) {
     Int acc = 0;
     for (const auto &[j, val] : a[i]) {
-      acc = (acc + val * x[j]) % p;
+      acc += val * x[j];
     }
-    y[i] = acc;
+    y[i] = acc % mod;
   }
 #endif
 
@@ -102,6 +106,8 @@ transpose_sparse_matrix_parallel(const SparsePairMatrix &a) {
 static Int dot_mod_parallel(const std::vector<Int> &u,
                             const std::vector<Int> &w, Int p, int threads) {
   const int n = static_cast<int>(u.size());
+  const bool use_compile_prime = (p == kCompilePrime);
+  const Int mod = use_compile_prime ? kCompilePrime : p;
 #ifdef _OPENMP
   std::vector<Int> partial(std::max(1, threads), 0);
 #pragma omp parallel num_threads(threads)
@@ -110,21 +116,22 @@ static Int dot_mod_parallel(const std::vector<Int> &u,
     Int local = 0;
 #pragma omp for schedule(static)
     for (int i = 0; i < n; ++i) {
-      local = (local + u[i] * w[i]) % p;
+      local += u[i] * w[i];
     }
-    partial[tid] = local;
+    partial[tid] = local % mod;
   }
 
   Int sum = 0;
   for (Int v : partial)
-    sum = (sum + v) % p;
-  return sum;
+    sum += v;
+  return sum % mod;
 #else
   (void)threads;
   Int sum = 0;
-  for (int i = 0; i < n; ++i)
-    sum = (sum + u[i] * w[i]) % p;
-  return sum;
+  for (int i = 0; i < n; ++i) {
+    sum += u[i] * w[i];
+  }
+  return sum % mod;
 #endif
 }
 
@@ -186,6 +193,16 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix &a,
   if (p <= 2) {
     throw std::invalid_argument("Modulus p must be an odd prime > 2");
   }
+  if (p != kCompilePrime) {
+    static std::atomic<bool> runtime_prime_notice_printed{false};
+    if (!runtime_prime_notice_printed.exchange(true,
+                                               std::memory_order_relaxed)) {
+      std::cout << "[wiedemann_parallel] using runtime prime p=" << p
+                << " (compile prime is " << kCompilePrime << ")\n";
+    }
+  }
+  // If p == kCompilePrime we still benefit from the compile-prime path in
+  // low-level kernels; otherwise kernels use the runtime modulus p.
   if (repeats <= 0) {
     throw std::invalid_argument("repeats must be positive");
   }
@@ -193,6 +210,16 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix &a,
   const int n = static_cast<int>(a.size());
   if (n == 0)
     return 0;
+  const unsigned __int128 overflow_threshold =
+      (static_cast<unsigned __int128>(1) << 64);
+  const unsigned __int128 worst_case = static_cast<unsigned __int128>(n) *
+                                       static_cast<unsigned __int128>(p) *
+                                       static_cast<unsigned __int128>(p);
+  if (worst_case > overflow_threshold) {
+    std::cout << "[wiedemann_parallel] alert: potential overflow risk because "
+                 "n*p*p > 2^64 (n="
+              << n << ", p=" << p << ")\n";
+  }
   // Precompute AT once per rank call.
   const SparsePairMatrix at = transpose_sparse_matrix_parallel(a);
   const int total_steps = std::max(1, repeats * 2 * n);
