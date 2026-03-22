@@ -38,9 +38,9 @@ static int clamp_worker_count(int requested_threads) {
 // Sparse matrix-vector multiply y = A*x (mod p), parallelized over rows.
 // Matrix is stored as list-of-rows, where each row is (col, value) tuples.
 static std::vector<Int> apply_sparse_matrix_parallel(const SparsePairMatrix& a,
-                                                      const std::vector<Int>& x,
-                                                      Int p,
-                                                      int threads) {
+                                                     const std::vector<Int>& x,
+                                                     Int p,
+                                                     int threads) {
     const int n = static_cast<int>(a.size());
     std::vector<Int> y(n, 0);
 
