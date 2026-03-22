@@ -20,7 +20,7 @@ namespace sparse_wiedemann_parallel {
 
 using Int = sparse_wiedemann::Int;
 using SparsePairMatrix = sparse_wiedemann::SparsePairMatrix;
-static constexpr Int kCompilePrime = 1009;
+static constexpr Int kCompilePrime = 100003;
 
 static int clamp_worker_count(int requested_threads) {
 #ifdef _OPENMP
@@ -219,13 +219,14 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix &a,
   const int n = static_cast<int>(a.size());
   if (n == 0)
     return 0;
-  const long double overflow_threshold = 2147483647.0L; // INT_MAX
-  const long double worst_case = static_cast<long double>(n) *
-                                 static_cast<long double>(p) *
-                                 static_cast<long double>(p);
+  const unsigned __int128 overflow_threshold =
+      (static_cast<unsigned __int128>(1) << 64);
+  const unsigned __int128 worst_case = static_cast<unsigned __int128>(n) *
+                                       static_cast<unsigned __int128>(p) *
+                                       static_cast<unsigned __int128>(p);
   if (worst_case > overflow_threshold) {
     std::cout << "[wiedemann_parallel] alert: potential overflow risk because "
-                 "n*p*p > 2^31-1 (n="
+                 "n*p*p > 2^64 (n="
               << n << ", p=" << p << ")\n";
   }
   // Precompute AT once per rank call.
@@ -285,8 +286,8 @@ static int rank_probabilistic_parallel_with_rng(const SparsePairMatrix &a,
 
 int rank_probabilistic_parallel(const SparsePairMatrix &a, Int p, int repeats,
                                 int requested_threads,
-                                std::uint32_t seed = std::random_device{}()) {
-  std::mt19937 rng(seed);
+                                std::uint64_t seed = std::random_device{}()) {
+  std::mt19937_64 rng(seed);
   return rank_probabilistic_parallel_with_rng(a, p, rng, repeats,
                                               requested_threads);
 }

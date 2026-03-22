@@ -22,37 +22,38 @@
 #include <omp.h>
 #endif
 
+using std::int64_t;
 // (same utilities as provided)
-static inline int mod_pow(int a, int e, int p) {
-  int r = 1 % p;
+static inline int64_t mod_pow(int64_t a, int64_t e, int64_t p) {
+  int64_t r = 1 % p;
   a %= p;
   while (e > 0) {
     if (e & 1)
-      r = (int)((__int128)r * a % p);
-    a = (int)((__int128)a * a % p);
+      r = (int64_t)((__int128)r * a % p);
+    a = (int64_t)((__int128)a * a % p);
     e >>= 1;
   }
   return r;
 }
-static inline int mod_inv(int a, int p) {
+static inline int64_t mod_inv(int64_t a, int64_t p) {
   a %= p;
   if (a < 0)
     a += p;
   return mod_pow(a, p - 2, p);
 }
-static bool is_prime_ll(int n) {
+static bool is_prime_ll(int64_t n) {
   if (n < 2)
     return false;
   if ((n % 2) == 0)
     return n == 2;
-  for (int d = 3; d * d <= n; d += 2)
+  for (int64_t d = 3; d * d <= n; d += 2)
     if (n % d == 0)
       return false;
   return true;
 }
-static std::vector<int> factor_distinct(int n) {
-  std::vector<int> fac;
-  for (int d = 2; d * d <= n; d += (d == 2 ? 1 : 2)) {
+static std::vector<int64_t> factor_distinct(int64_t n) {
+  std::vector<int64_t> fac;
+  for (int64_t d = 2; d * d <= n; d += (d == 2 ? 1 : 2)) {
     if (n % d == 0) {
       fac.push_back(d);
       while (n % d == 0)
@@ -63,10 +64,10 @@ static std::vector<int> factor_distinct(int n) {
     fac.push_back(n);
   return fac;
 }
-static int primitive_root_mod_prime(int p) {
-  const int phi = p - 1;
+static int64_t primitive_root_mod_prime(int64_t p) {
+  const int64_t phi = p - 1;
   auto fac = factor_distinct(phi);
-  for (int g = 2; g < p; g++) {
+  for (int64_t g = 2; g < p; g++) {
     bool ok = true;
     for (auto q : fac) {
       if (mod_pow(g, phi / q, p) == 1) {
@@ -79,27 +80,27 @@ static int primitive_root_mod_prime(int p) {
   }
   throw std::runtime_error("No primitive root found");
 }
-static int pick_prime_1_mod_m(int m, int start = 1000000) {
+static int64_t pick_prime_1_mod_m(int64_t m, int64_t start = 1000000) {
   if (m == 1)
-    return 1009;
-  int t = (start - 1) / m + 1;
+    return 100003;
+  int64_t t = (start - 1) / m + 1;
   while (true) {
-    int cand = m * t + 1;
+    int64_t cand = m * t + 1;
     if (is_prime_ll(cand))
       return cand;
     t++;
   }
 }
-static int q_scalar_in_gfp(int p, int m, int exp, int sign) {
+static int64_t q_scalar_in_gfp(int64_t p, int64_t m, int64_t exp, int sign) {
   if (sign != 1 && sign != -1)
     throw std::runtime_error("sign");
   if (m == 1)
     return sign == 1 ? 1 : (p - 1);
   if (p % m != 1)
     throw std::runtime_error("p mod m");
-  int g = primitive_root_mod_prime(p);
-  int z = mod_pow(g, (p - 1) / m, p);
-  int q = mod_pow(z, ((exp % m) + m) % m, p);
+  int64_t g = primitive_root_mod_prime(p);
+  int64_t z = mod_pow(g, (p - 1) / m, p);
+  int64_t q = mod_pow(z, ((exp % m) + m) % m, p);
   if (sign == -1)
     q = (p - q) % p;
   return q;
@@ -164,29 +165,30 @@ struct Dihedral {
   inline int reflection_gid(int i) const { return gid(i, 1); }
 };
 
-static std::vector<int> powB_list(int base, int n) {
-  std::vector<int> p(n + 1, 1);
+static std::vector<int64_t> powB_list(int base, int n) {
+  std::vector<int64_t> p(n + 1, 1);
   for (int i = 1; i <= n; i++)
     p[i] = p[i - 1] * base;
   return p;
 }
-static inline void decode_base(int wid, int base, int L, uint8_t *out) {
+static inline void decode_base(int64_t wid, int base, int L, uint8_t *out) {
   for (int i = 0; i < L; i++) {
     out[i] = (uint8_t)(wid % base);
     wid /= base;
   }
 }
-static inline int encode_base(const uint8_t *d, int L,
-                              const std::vector<int> &powB) {
-  int s = 0;
+static inline int64_t encode_base(const uint8_t *d, int L,
+                                  const std::vector<int64_t> &powB) {
+  int64_t s = 0;
   for (int i = 0; i < L; i++)
-    s += (int)d[i] * powB[i];
+    s += (int64_t)d[i] * powB[i];
   return s;
 }
-static inline int replace_segment(int wid, int start, int L, int out_id,
-                                  const std::vector<int> &powB) {
-  int low = wid % powB[start];
-  int high = wid / powB[start + L];
+static inline int64_t replace_segment(int64_t wid, int start, int L,
+                                      int64_t out_id,
+                                      const std::vector<int64_t> &powB) {
+  int64_t low = wid % powB[start];
+  int64_t high = wid / powB[start + L];
   return low + out_id * powB[start] + high * powB[start + L];
 }
 
@@ -224,7 +226,7 @@ static std::vector<std::vector<int>> shuffle_swaplists(int p_len, int q_len) {
 
 struct QShufflePQ {
   int p_len = 0, q_len = 0, out_len = 0;
-  std::vector<std::vector<std::pair<int, int>>> data;
+  std::vector<std::vector<std::pair<int64_t, int64_t>>> data;
 };
 static inline void
 apply_swaps_rack(uint8_t *d, int L, const std::vector<int> &swaps,
@@ -237,24 +239,24 @@ apply_swaps_rack(uint8_t *d, int L, const std::vector<int> &swaps,
 }
 
 static std::vector<std::vector<QShufflePQ>>
-precompute_qshuffle_selected(int n, int base, int P, int q_scalar,
+precompute_qshuffle_selected(int n, int base, int64_t P, int64_t q_scalar,
                              const std::vector<std::vector<uint8_t>> &op,
-                             const std::vector<int> &powB,
+                             const std::vector<int64_t> &powB,
                              const std::vector<std::pair<int, int>> &pairs) {
-  std::vector<int> qpow(n * n + 1, 1);
+  std::vector<int64_t> qpow(n * n + 1, 1);
   for (int i = 1; i < (int)qpow.size(); i++)
-    qpow[i] = (int)((__int128)qpow[i - 1] * q_scalar % P);
+    qpow[i] = (int64_t)((__int128)qpow[i - 1] * q_scalar % P);
   std::vector<std::vector<std::vector<uint8_t>>> digits(n + 1);
   for (int L = 1; L <= n; L++) {
     digits[L].assign((size_t)powB[L], std::vector<uint8_t>(L));
-    for (int wid = 0; wid < powB[L]; wid++)
+    for (int64_t wid = 0; wid < powB[L]; wid++)
       decode_base(wid, base, L, digits[L][(size_t)wid].data());
   }
   std::vector<std::vector<QShufflePQ>> table(n + 1,
                                              std::vector<QShufflePQ>(n + 1));
   auto do_pair = [&](int p_len, int q_len) {
     int out_len = p_len + q_len;
-    int out_sz = powB[out_len];
+    int64_t out_sz = powB[out_len];
     QShufflePQ pq;
     pq.p_len = p_len;
     pq.q_len = q_len;
@@ -262,11 +264,11 @@ precompute_qshuffle_selected(int n, int base, int P, int q_scalar,
     pq.data.assign((size_t)(powB[p_len] * powB[q_len]), {});
     auto sh = shuffle_swaplists(p_len, q_len);
     std::array<uint8_t, 64> basew{}, work{};
-    std::vector<int> acc((size_t)out_sz, 0);
-    std::vector<int> touched;
+    std::vector<int64_t> acc((size_t)out_sz, 0);
+    std::vector<int64_t> touched;
     touched.reserve(256);
-    for (int u = 0; u < powB[p_len]; u++)
-      for (int v = 0; v < powB[q_len]; v++) {
+    for (int64_t u = 0; u < powB[p_len]; u++)
+      for (int64_t v = 0; v < powB[q_len]; v++) {
         auto &ud = digits[p_len][(size_t)u];
         auto &vd = digits[q_len][(size_t)v];
         for (int i = 0; i < p_len; i++)
@@ -278,21 +280,21 @@ precompute_qshuffle_selected(int n, int base, int P, int q_scalar,
           for (int t = 0; t < out_len; t++)
             work[t] = basew[t];
           apply_swaps_rack(work.data(), out_len, swaps, op);
-          int out_id = encode_base(work.data(), out_len, powB);
-          int coeff = qpow[(int)swaps.size()];
+          int64_t out_id = encode_base(work.data(), out_len, powB);
+          int64_t coeff = qpow[(int)swaps.size()];
           if (acc[(size_t)out_id] == 0)
             touched.push_back(out_id);
-          int nv = (acc[(size_t)out_id] + coeff) % P;
+          int64_t nv = (acc[(size_t)out_id] + coeff) % P;
           if (nv < 0)
             nv += P;
           acc[(size_t)out_id] = nv;
         }
-        int idx = u * powB[q_len] + v;
+        int64_t idx = u * powB[q_len] + v;
         auto &vec = pq.data[(size_t)idx];
         vec.clear();
         vec.reserve(touched.size());
-        for (int out_id : touched) {
-          int c = acc[(size_t)out_id];
+        for (int64_t out_id : touched) {
+          int64_t c = acc[(size_t)out_id];
           if (c)
             vec.push_back({out_id, c});
           acc[(size_t)out_id] = 0;
@@ -342,7 +344,7 @@ static std::vector<int> cuts_for_comp(const std::vector<int> &comp) {
 }
 struct Spec {
   int start, p_len, q_len, out_len, new_pos;
-  int sgn;
+  int64_t sgn;
 };
 struct VecHash {
   size_t operator()(const std::vector<int> &v) const noexcept {
@@ -358,7 +360,7 @@ struct KData {
   std::vector<std::vector<Spec>> specs;
   std::vector<std::pair<int, int>> needed_pairs;
 };
-static KData precompute_kdata(int n, int k, int P) {
+static KData precompute_kdata(int n, int k, int64_t P) {
   KData kd;
   kd.k = k;
   kd.comps_k = compositions(n, k);
@@ -380,7 +382,7 @@ static KData precompute_kdata(int n, int k, int P) {
       new_comp.push_back(out_len);
       new_comp.insert(new_comp.end(), comp.begin() + i + 1, comp.end());
       int new_pos = pos_t[new_comp];
-      int sgn = ((i - 1) & 1) ? (P - 1) : 1;
+      int64_t sgn = ((i - 1) & 1) ? (P - 1) : 1;
       sp.push_back({start, p_len, q_len, out_len, new_pos, sgn});
       int key = (p_len << 8) | q_len;
       if (!seen[key]) {
@@ -394,23 +396,23 @@ static KData precompute_kdata(int n, int k, int P) {
 }
 
 struct MonoBlocks {
-  std::vector<std::vector<int>> words_by_g;
+  std::vector<std::vector<int64_t>> words_by_g;
   std::vector<int> idx_in_block;
 };
 static MonoBlocks monodromy_blocks_Dn(int n, int base,
-                                      const std::vector<int> &powB,
+                                      const std::vector<int64_t> &powB,
                                       const Dihedral &D) {
   int G = D.G;
-  int Nwords = powB[n];
+  int64_t Nwords = powB[n];
   MonoBlocks mb;
   mb.words_by_g.assign(G, {});
   mb.idx_in_block.assign((size_t)Nwords, -1);
   std::vector<int> refl(base);
   for (int i = 0; i < base; i++)
     refl[i] = D.reflection_gid(i);
-  for (int wid = 0; wid < Nwords; wid++) {
+  for (int64_t wid = 0; wid < Nwords; wid++) {
     int g = D.id();
-    int x = wid;
+    int64_t x = wid;
     for (int i = 0; i < n; i++) {
       int d = (int)(x % base);
       x /= base;
@@ -459,8 +461,8 @@ struct SparseWiedemannInput {
 };
 
 static SparseWiedemannInput compile_block_differential_matrix(
-    int n, int P, const std::vector<std::vector<QShufflePQ>> &qsh,
-    const std::vector<int> &powB, const MonoBlocks &mb, const KData &kd,
+    int n, int64_t P, const std::vector<std::vector<QShufflePQ>> &qsh,
+    const std::vector<int64_t> &powB, const MonoBlocks &mb, const KData &kd,
     int g) {
   const auto &words = mb.words_by_g[g];
   int B = (int)words.size();
@@ -469,18 +471,18 @@ static SparseWiedemannInput compile_block_differential_matrix(
   int rows = (int)kd.comps_t.size() * B;
   int cols = (int)kd.comps_k.size() * B;
   int N = std::max(rows, cols);
-  std::vector<int> acc(rows, 0);
+  std::vector<int64_t> acc(rows, 0);
   std::vector<int> touched;
   std::vector<int> mark(rows, 0);
   int stamp = 1;
-  auto idx_map = [&](int wid) { return mb.idx_in_block[(size_t)wid]; };
+  auto idx_map = [&](int64_t wid) { return mb.idx_in_block[(size_t)wid]; };
   SparseWiedemannInput mat;
   mat.sq.assign(N, {});
   for (int ci = 0; ci < (int)kd.comps_k.size(); ci++) {
     const auto &sp = kd.specs[ci];
     for (int c = 0; c < B; c++) {
       int col = ci * B + c;
-      int wid = words[c];
+      int64_t wid = words[c];
       touched.clear();
       stamp++;
       if (stamp == 0) {
@@ -488,24 +490,24 @@ static SparseWiedemannInput compile_block_differential_matrix(
         stamp = 1;
       }
       for (const auto &ms : sp) {
-        int u = (wid / powB[ms.start]) % powB[ms.p_len];
-        int v = (wid / powB[ms.start + ms.p_len]) % powB[ms.q_len];
-        int idx = u * powB[ms.q_len] + v;
+        int64_t u = (wid / powB[ms.start]) % powB[ms.p_len];
+        int64_t v = (wid / powB[ms.start + ms.p_len]) % powB[ms.q_len];
+        int64_t idx = u * powB[ms.q_len] + v;
         const auto &lst = qsh[ms.p_len][ms.q_len].data[(size_t)idx];
         int row_base = ms.new_pos * B;
         for (const auto &ow : lst) {
-          int out_id = ow.first, coeff = ow.second;
-          int val = (int)((__int128)ms.sgn * coeff % P);
+          int64_t out_id = ow.first, coeff = ow.second;
+          int64_t val = (int64_t)((__int128)ms.sgn * coeff % P);
           if (!val)
             continue;
-          int new_wid =
+          int64_t new_wid =
               replace_segment(wid, ms.start, ms.out_len, out_id, powB);
           int row = row_base + idx_map(new_wid);
           if (mark[row] != stamp) {
             mark[row] = stamp;
             touched.push_back(row);
           }
-          int nv = (acc[row] + val) % P;
+          int64_t nv = (acc[row] + val) % P;
           if (nv < 0)
             nv += P;
           acc[row] = nv;
@@ -513,7 +515,7 @@ static SparseWiedemannInput compile_block_differential_matrix(
       }
       std::sort(touched.begin(), touched.end());
       for (int r : touched) {
-        int cval = acc[r];
+        int64_t cval = acc[r];
         if (cval)
           mat.sq[r].push_back({col, cval});
         acc[r] = 0;
@@ -523,9 +525,9 @@ static SparseWiedemannInput compile_block_differential_matrix(
   return mat;
 }
 
-static int rank_rectangular_wiedemann(const SparseWiedemannInput &d, int P,
+static int rank_rectangular_wiedemann(const SparseWiedemannInput &d, int64_t P,
                                       int repeats, int threads,
-                                      std::uint32_t seed) {
+                                      std::uint64_t seed) {
   if (d.sq.empty())
     return 0;
   return sparse_wiedemann_parallel::rank_probabilistic_parallel(
@@ -539,12 +541,12 @@ struct Task {
   int block_words;
   int rows;
   int cols;
-  int size_score;
+  long long size_score;
 };
 int main(int argc, char **argv) {
   int dihedralN = 5, n = 5, threads = 8, only_k = -1, sign = -1, repeats = 1,
       nested_blocks = 0;
-  int m = 1, exp = 1, P = 0;
+  int64_t m = 1, exp = 1, P = 0;
   for (int i = 1; i < argc; i++) {
     std::string s = argv[i];
     auto need = [&](const char *opt) {
@@ -579,7 +581,7 @@ int main(int argc, char **argv) {
     P = pick_prime_1_mod_m(m);
   int base = dihedralN;
   Dihedral D(dihedralN);
-  int q_scalar = q_scalar_in_gfp(P, m, exp, sign);
+  int64_t q_scalar = q_scalar_in_gfp(P, m, exp, sign);
   auto powB = powB_list(base, n);
 #ifdef _OPENMP
   omp_set_dynamic(0);
@@ -604,10 +606,10 @@ int main(int argc, char **argv) {
   auto t0 = std::chrono::high_resolution_clock::now();
   auto qsh = precompute_qshuffle_selected(n, base, P, q_scalar, op, powB, {});
   auto t1 = std::chrono::high_resolution_clock::now();
-  std::vector<std::atomic<int>> rank_sum(n + 2);
+  std::vector<std::atomic<long long>> rank_sum(n + 2);
   for (int i = 0; i < n + 2; i++)
     rank_sum[i].store(0);
-  std::vector<std::atomic<int>> time_ns_sum(n + 2);
+  std::vector<std::atomic<long long>> time_ns_sum(n + 2);
   for (int i = 0; i < n + 2; i++)
     time_ns_sum[i].store(0);
   std::vector<Task> tasks;
@@ -620,7 +622,7 @@ int main(int argc, char **argv) {
         continue;
       const int rows = (int)kd[k].comps_t.size() * block_words;
       const int cols = (int)kd[k].comps_k.size() * block_words;
-      const int size_score = (int)rows * (int)cols;
+      const long long size_score = (long long)rows * (long long)cols;
       tasks.push_back({k, rep, (int)cc.classes[cid].size(), block_words, rows,
                        cols, size_score});
     }
@@ -655,13 +657,14 @@ int main(int argc, char **argv) {
       auto mat = compile_block_differential_matrix(n, P, qsh, powB, mb, kd[t.k],
                                                    t.rep_g);
       int local_inner = inner_threads_per_worker;
-      std::uint32_t seed = 2166136261u ^ (std::uint32_t)t.k * 1315423911u ^
-                           (std::uint32_t)t.rep_g * 2654435761u;
+      std::uint64_t seed = 1469598103934665603ULL ^
+                           (std::uint64_t)t.k * 1315423911ULL ^
+                           (std::uint64_t)t.rep_g * 2654435761ULL;
       int rk = rank_rectangular_wiedemann(mat, P, repeats, local_inner, seed);
-      rank_sum[t.k].fetch_add((int)rk * (int)t.class_size,
+      rank_sum[t.k].fetch_add((long long)rk * (long long)t.class_size,
                               std::memory_order_relaxed);
       auto te = std::chrono::high_resolution_clock::now();
-      int dt_ns =
+      long long dt_ns =
           std::chrono::duration_cast<std::chrono::nanoseconds>(te - ts).count();
       time_ns_sum[t.k].fetch_add(dt_ns, std::memory_order_relaxed);
     }
@@ -677,7 +680,7 @@ int main(int argc, char **argv) {
   for (int k = 2; k <= n; k++) {
     rank_d[k] = (__int128)rank_sum[k].load(std::memory_order_relaxed);
     time_d[k] = (double)time_ns_sum[k].load(std::memory_order_relaxed) / 1e9;
-    std::cout << "rank(d_" << k << ")=" << (int)rank_d[k]
+    std::cout << "rank(d_" << k << ")=" << (long long)rank_d[k]
               << " time=" << time_d[k] << "s\n";
   }
   auto t2 = std::chrono::high_resolution_clock::now();
